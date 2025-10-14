@@ -1,7 +1,3 @@
-# train_retriever.py
-"""
-Retriever pre-training with Multi-Intent and Selector
-"""
 import os
 import time
 import numpy as np
@@ -27,7 +23,6 @@ from src.losses import (
 
 @torch.no_grad()
 def eval_epoch(config, device, data_loader, model, bridge):
-    """Evaluation with intent selector"""
     model.eval()
     bridge.selector.wae.eval()
     
@@ -58,7 +53,6 @@ def eval_epoch(config, device, data_loader, model, bridge):
         if len(target_triple_ids) == 0:
             continue
 
-        # Average across intents
         avg_logits = all_intent_logits.mean(dim=-1).cpu()
         sorted_ids = torch.argsort(avg_logits, descending=True)
         ranks = torch.empty_like(sorted_ids)
@@ -69,7 +63,6 @@ def eval_epoch(config, device, data_loader, model, bridge):
     
     return np.mean(recall_100_list) if recall_100_list else 0.0
 
-# train_retriever.py - train_epoch 함수 수정 부분만
 
 def train_epoch(config, device, train_loader, model, bridge, optimizer, 
                 epoch, args):
@@ -120,17 +113,15 @@ def train_epoch(config, device, train_loader, model, bridge, optimizer,
         target_triple_probs = target_triple_probs.to(device)
         target_expanded = target_triple_probs.unsqueeze(-1).expand(-1, actual_num_intents)
         
-        # ✅ Task losses - READ FROM ARGS (not hardcoded)
-        # Note: For retriever training, we use simple default values since
-        # loss hyperparameters are not in retriever config
+
         bce_loss = focal_loss_with_pos_weight(
             all_intent_logits, target_expanded, 
-            alpha=0.75,  # Default for retriever training
+            alpha=0.75,  
             gamma=2.0
         )
         rank_loss = ranking_loss(
             all_intent_logits, target_triple_probs, 
-            margin=2.0  # Default for retriever training
+            margin=2.0  
         )
         task_loss = bce_loss + 0.5 * rank_loss
         
@@ -200,7 +191,6 @@ def main(args):
     
     emb_size = train_set[0]['q_emb'].shape[-1]
     
-    # Multi-Intent Retriever - using config values
     num_intents = config['retriever']['num_intents']
     model = Retriever(
         emb_size=emb_size,
@@ -214,7 +204,6 @@ def main(args):
         model.load_state_dict(sd.get('model_state_dict', sd), strict=False)
         print(f"Loaded retriever from {args.retriever_ckpt}")
     
-    # Intent Selector Bridge
     bridge = IntentSelectorBridge(
         run_dir=args.intent_run_dir,
         g_cache=args.g_cache,
@@ -234,7 +223,6 @@ def main(args):
     if hasattr(bridge, 'T') and bridge.T is not None:
         bridge.T = bridge.T.to(dtype=torch.bfloat16)
     
-    # Optimizer - using config values
     optimizer = Adam([
         {"params": model.parameters(), "lr": config['optimizer']['lr']},
         {"params": bridge.selector.wae.parameters(), "lr": config['optimizer']['selector_lr']},
@@ -249,20 +237,16 @@ def main(args):
     patience_counter = 0
 
     for epoch in range(config['train']['num_epochs']):
-        # Training
         train_log = train_epoch(
             config, device, train_loader, model, bridge, optimizer, 
             epoch+1, args)
         
-        # Validation
         val_recall = eval_epoch(config, device, val_loader, model, bridge)
         
-        # Logging
         print(f"[Epoch {epoch+1:3d}] "
               f"Train Loss: {train_log['loss']:.4f} | "
               f"Val Recall@100: {val_recall:.4f}")
         
-        # Save best model
         if val_recall > best_recall:
             best_recall = val_recall
             patience_counter = 0
@@ -293,7 +277,6 @@ if __name__ == '__main__':
     
     parser = ArgumentParser()
     
-    # Required
     parser.add_argument('-d', '--dataset', type=str, required=True, 
                         choices=['webqsp', 'cwq'])
     parser.add_argument('--intent_run_dir', type=str, required=True,
@@ -301,12 +284,10 @@ if __name__ == '__main__':
     parser.add_argument('--g_cache', type=str, required=True,
                         help='Path to G cache')
     
-    # Intent configuration
     parser.add_argument('--cum_threshold', type=float, default=0.4)
     parser.add_argument('--min_k', type=int, default=1)
     parser.add_argument('--max_k', type=int, default=4)
     
-    # Training control
     parser.add_argument('--train_selector_after', type=int, default=0,
                         help='Start training selector after this epoch')
     parser.add_argument('--grad_to_beta', action='store_true',
@@ -314,13 +295,11 @@ if __name__ == '__main__':
     parser.add_argument('--retriever_ckpt', type=str, default='',
                         help='Path to pretrained retriever checkpoint')
     
-    # Loss weights
     parser.add_argument('--decorr_weight', type=float, default=0.1,
                         help='Weight for decorrelation loss')
     parser.add_argument('--pattern_div_weight', type=float, default=0.05,
                         help='Weight for pattern diversity loss')
     
-    # Loss settings
     parser.add_argument('--decorr_k', type=int, default=100,
                         help='Top-k for decorrelation loss')
     parser.add_argument('--decorr_mode', type=str, default='union',

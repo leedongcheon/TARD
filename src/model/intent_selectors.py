@@ -44,7 +44,7 @@ class IntentSelectorBridge:
         self.D = self.G.size(1)
         assert self.G.size(0) == self.V, f"G vocab({self.G.size(0)}) != beta V({self.V})"
 
-        from src.model.Intent_selector.S2WTM import S2WTM_Flex
+        from Intent_selector.S2WTM import S2WTM_Flex
         self.selector = S2WTM_Flex(
             mode="emb", emb_dim=self.D, bow_dim=self.V,
             n_topic=self.K, decoder_type=self.dec_type,

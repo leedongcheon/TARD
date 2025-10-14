@@ -1,7 +1,3 @@
-# train_joint.py
-"""
-Joint Training: LLM + Retriever + Intent Selector End-to-End
-"""
 import os, gc, argparse, warnings, pathlib
 from pathlib import Path
 import numpy as np
@@ -106,12 +102,10 @@ def parse_args():
     """Parse command line arguments"""
     p = argparse.ArgumentParser()
     
-    # ✅ Dataset selection (NEW)
     p.add_argument('-d', '--dataset', type=str, required=True,
                    choices=['webqsp', 'cwq'],
                    help='Dataset to use (webqsp or cwq)')
     
-    # Core settings
     p.add_argument('--config', type=str, default=None,
                    help='Config file path (default: configs/joint/{dataset}.yaml)')
     p.add_argument('--model_name', default="meta-llama/Meta-Llama-3.1-8B-Instruct",
@@ -120,7 +114,6 @@ def parse_args():
     p.add_argument('--save_dir', type=str, default=None,
                    help='Directory to save checkpoints (default: joint_{dataset}_run)')
     
-    # Intent selector (required)
     p.add_argument('--intent_run_dir', type=str, required=True,
                    help='Path to intent selector checkpoint directory')
     p.add_argument('--g_cache', type=str, required=True,
@@ -134,7 +127,6 @@ def parse_args():
     p.add_argument('--grad_to_beta', action='store_true',
                    help='Enable gradient flow to beta parameter')
     
-    # Checkpoint loading
     p.add_argument('--retriever_ckpt', type=str, default="",
                    help='Path to pretrained retriever checkpoint')
     p.add_argument('--load_selector_from_retriever_ckpt', action='store_true',
@@ -144,13 +136,11 @@ def parse_args():
     p.add_argument('--joint_dir', type=str, default='',
                    help='Directory containing joint training checkpoints')
     
-    # Training mode
     p.add_argument('--end_to_end', action='store_true',
                    help='Enable end-to-end training (update retriever)')
     p.add_argument('--use_adaptive_dpo', action='store_true',
                    help='Use adaptive DPO training mode')
     
-    # Test mode
     p.add_argument('--do_test', action='store_true',
                    help='Run test inference after training')
     p.add_argument('--test_split', type=str, default='test',
@@ -160,7 +150,6 @@ def parse_args():
     p.add_argument('--limit_test', type=int, default=0,
                    help='Limit number of test samples (0 = no limit)')
     
-    # Optional overrides (config values can be overridden)
     p.add_argument('--seed', type=int, default=None,
                    help='Random seed (overrides config)')
     p.add_argument('--epochs', type=int, default=None,
@@ -178,10 +167,8 @@ def run_epoch(args, config, dataloader, retriever, triple_proj, enhanced_prompt_
     train_selector_now = (mode == "train" and (epoch >= train_cfg['train_selector_after']))
     retriever_dtype = torch.bfloat16
 
-    # Set training modes
     if mode == "train":
         if is_dpo_stage:
-            # DPO stage: only train LLM
             retriever.eval()
             triple_proj.eval()
             enhanced_prompt_module.eval()
@@ -196,7 +183,6 @@ def run_epoch(args, config, dataloader, retriever, triple_proj, enhanced_prompt_
             for p in bridge.selector.wae.parameters(): 
                 p.requires_grad = False
         else:
-            # Joint training stage
             triple_proj.train()
             enhanced_prompt_module.train()
             llm.train()
@@ -219,7 +205,6 @@ def run_epoch(args, config, dataloader, retriever, triple_proj, enhanced_prompt_
                 for p in retriever.parameters():
                     p.requires_grad = False
     else:
-        # Validation mode
         retriever.eval()
         triple_proj.eval()
         enhanced_prompt_module.eval()
@@ -229,34 +214,28 @@ def run_epoch(args, config, dataloader, retriever, triple_proj, enhanced_prompt_
     losses, accum = [], 0.0
     gas = train_cfg['gradient_accumulation_steps'] if mode == "train" else 1
     
-    # Prepare answer lead tokens
     ans_lead_ids = tokenizer("Answer:\n", add_special_tokens=False, return_tensors='pt').input_ids.to(device)
     ans_lead_embeds = to_llm(llm.get_input_embeddings()(ans_lead_ids), llm)
     
-    # Read config values
     per_intent_total = train_cfg['per_intent_total']
     tau_gumbel = config['retriever']['selection']['tau_gumbel']
     gate_boost = config['neural_prompt']['gate_boost']
 
     for step, sample in enumerate(tqdm(dataloader, desc=f"{mode} E{epoch}", leave=False)):
-        # Prepare sample data
         (h_id_tensor, r_id_tensor, t_id_tensor, q_emb, entity_embs,
          num_non_text_entities, relation_embs, topic_entity_one_hot,
          target_triple_probs, a_entity_id_list) = prepare_sample(device, sample)
 
-        # Convert to retriever dtype
         q_emb = q_emb.to(device=device, dtype=retriever_dtype)
         entity_embs = entity_embs.to(device=device, dtype=retriever_dtype)
         relation_embs = relation_embs.to(device=device, dtype=retriever_dtype)
         if torch.is_floating_point(topic_entity_one_hot):
             topic_entity_one_hot = topic_entity_one_hot.to(device=device, dtype=retriever_dtype)
 
-        # Intent selection
         intent_embs, sel_idx, _ = bridge.select(q_emb)
         if intent_embs is not None:
             intent_embs = intent_embs.to(device=device, dtype=retriever_dtype)
 
-        # Retrieval
         with torch.set_grad_enabled(mode == "train" and enable_e2e and not is_dpo_stage):
             logits_TI = retriever(
                 h_id_tensor, r_id_tensor, t_id_tensor, q_emb, entity_embs,
@@ -267,7 +246,6 @@ def run_epoch(args, config, dataloader, retriever, triple_proj, enhanced_prompt_
         T, I = logits_TI.shape
         k_each = get_per_intent_quota(I, per_intent_total)
         
-        # Triple selection
         if mode == "train" and not is_dpo_stage:
             intent_masks = gumbel_topk_batch(logits_TI, k=k_each, tau_gumbel=tau_gumbel)
         else:
@@ -282,22 +260,20 @@ def run_epoch(args, config, dataloader, retriever, triple_proj, enhanced_prompt_
         overlap_cnt = intent_masks[sel_indices].sum(dim=1)
         entity_list = sample['text_entity_list'] + sample['non_text_entity_list']
 
-        # Compute triple embeddings using utility function
         triple_embeds = compute_triple_embeddings(
             h_id_tensor, r_id_tensor, t_id_tensor,
             entity_embs, num_non_text_entities,
             relation_embs, retriever, triple_proj, device
         )
         
-        # Apply gate scaling
         scale = (1.0 + gate_boost * gate).to(triple_embeds.dtype).unsqueeze(1)
         triple_embeds = triple_embeds * scale
 
-        # Create fact texts
+        
         fact_texts_weighted = create_fact_texts_with_markers(entity_list, sample, sel_indices, overlap_cnt)
         fact_texts_plain = create_fact_texts_without_markers(entity_list, sample, sel_indices)
 
-        # Create neural prompts (weighted and plain)
+        
         neural_prompt_weighted = enhanced_prompt_module(
             triple_embeds, overlap_cnt, fact_texts_weighted, sel_indices,
             tokenizer, llm, device, gate_weights=gate, disable_emphasis=False
@@ -307,7 +283,7 @@ def run_epoch(args, config, dataloader, retriever, triple_proj, enhanced_prompt_
             tokenizer, llm, device, gate_weights=None, disable_emphasis=True
         )
 
-        # Prepare question
+        
         qtext = sample['question'].strip()
         if not qtext.endswith('?'):
             qtext += '?'
@@ -319,14 +295,14 @@ def run_epoch(args, config, dataloader, retriever, triple_proj, enhanced_prompt_
         chat_ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True, return_tensors='pt').to(device)
         chat_embeds = to_llm(llm.get_input_embeddings()(chat_ids), llm)
 
-        # KG wrapper tokens
+        
         kg_wrapper = config['neural_prompt']['kg_wrapper']
         kg_start_ids = tokenizer(kg_wrapper['start'], add_special_tokens=False, return_tensors='pt').input_ids.to(device)
         kg_end_ids = tokenizer(kg_wrapper['end'], add_special_tokens=False, return_tensors='pt').input_ids.to(device)
         kg_start_embeds = to_llm(llm.get_input_embeddings()(kg_start_ids), llm)
         kg_end_embeds = to_llm(llm.get_input_embeddings()(kg_end_ids), llm)
 
-        # Construct input prefixes
+        
         inputs_prefix_weighted = torch.cat([
             chat_embeds, kg_start_embeds, neural_prompt_weighted, 
             kg_end_embeds, ans_lead_embeds
@@ -336,12 +312,12 @@ def run_epoch(args, config, dataloader, retriever, triple_proj, enhanced_prompt_
             kg_end_embeds, ans_lead_embeds
         ], dim=1)
 
-        # Get ground truth answers
+        
         answers = [a for a in sample.get('a_entity', []) if isinstance(a, str) and a.strip()]
         if len(answers) == 0:
             answers = ["not available"]
 
-        # DPO preference selection
+        
         chosen_prefix = None
         rejected_prefix = None
         if mode == "train" and is_dpo_stage:
@@ -369,10 +345,8 @@ def run_epoch(args, config, dataloader, retriever, triple_proj, enhanced_prompt_
                     chosen_prefix = inputs_prefix_plain
                     rejected_prefix = inputs_prefix_weighted
 
-        # Training forward pass
         if mode == "train":
             with amp.autocast(device_type='cuda', dtype=torch.bfloat16, cache_enabled=True):
-                # Prepare gold answers
                 answers = answers[:30]
                 gold_text = "\n".join([f"ans: {a}" for a in answers]) + tokenizer.eos_token
                 gold_ids = tokenizer(
@@ -381,7 +355,6 @@ def run_epoch(args, config, dataloader, retriever, triple_proj, enhanced_prompt_
                 ).input_ids.to(device)
                 gold_embeds = to_llm(llm.get_input_embeddings()(gold_ids), llm)
 
-                # LM loss
                 inputs_full_weighted = torch.cat([inputs_prefix_weighted, gold_embeds], dim=1)
                 attn_mask = torch.ones(inputs_full_weighted.size()[:-1], dtype=torch.long, device=device)
                 labels = torch.full((1, inputs_full_weighted.size(1)), -100, device=device)
@@ -392,7 +365,6 @@ def run_epoch(args, config, dataloader, retriever, triple_proj, enhanced_prompt_
                 out = llm(inputs_embeds=inputs_full_weighted, attention_mask=attn_mask, labels=labels)
                 lm_loss = out.loss
 
-                # DPO loss
                 dpo_loss = torch.tensor(0.0, device=device)
                 if is_dpo_stage and chosen_prefix is not None:
                     def get_logprob(prefix, gold_ids_local):
@@ -432,7 +404,6 @@ def run_epoch(args, config, dataloader, retriever, triple_proj, enhanced_prompt_
                         k=loss_cfg['decorrelation_k']
                     )
                     
-                    # Pattern diversity
                     positive_mask = (target > 0.5)
                     pattern_loss = pattern_diversity_loss(
                         logits_TI, 
@@ -450,14 +421,12 @@ def run_epoch(args, config, dataloader, retriever, triple_proj, enhanced_prompt_
                     ret_loss = torch.tensor(0.0, device=device)
                     div_loss = torch.tensor(0.0, device=device)
 
-                # Total loss
                 if is_dpo_stage:
                     total = (lm_loss + train_cfg['dpo_weight'] * dpo_loss) / gas
                 else:
                     rho = train_cfg['rho']
                     total = (rho * ret_loss + (1 - rho) * lm_loss + 
                             div_loss + train_cfg['dpo_weight'] * dpo_loss) / gas
-            # Backward
             total.backward()
             accum += float(total.item())
             
@@ -481,7 +450,6 @@ def run_epoch(args, config, dataloader, retriever, triple_proj, enhanced_prompt_
                 accum = 0.0
         
         else:
-            # Validation forward pass
             with torch.no_grad(), amp.autocast(device_type='cuda', dtype=torch.bfloat16, cache_enabled=True):
                 answers = answers[:30]
                 gold_text = "\n".join([f"ans: {a}" for a in answers]) + tokenizer.eos_token
@@ -500,13 +468,11 @@ def run_epoch(args, config, dataloader, retriever, triple_proj, enhanced_prompt_
                 total = out.loss
                 losses.append(float(total.item()))
 
-        # Cleanup
         del neural_prompt_weighted, neural_prompt_plain, triple_embeds
         if (step + 1) % (gas * 10) == 0:
             gc.collect()
             torch.cuda.empty_cache()
 
-    # Final gradient step if accumulated
     if mode == "train" and accum > 0:
         if is_dpo_stage:
             all_params = [p for p in llm.parameters() if p.requires_grad]
@@ -528,27 +494,21 @@ def run_epoch(args, config, dataloader, retriever, triple_proj, enhanced_prompt_
     avg = float(sum(losses) / max(1, len(losses)))
     return avg
 def main():
-    """Main training function"""
     args = parse_args()
     
-    # ✅ Auto-select config file based on dataset
     if args.config is None:
         config_file = f'configs/joint/{args.dataset}.yaml'
     else:
         config_file = args.config
     
-    # ✅ Auto-select save directory
     if args.save_dir is None:
         args.save_dir = f"joint_{args.dataset}_run"
     
-    # ✅ Auto-select test output path
     if args.test_output is None:
         args.test_output = f'results/{args.dataset}_predictions.jsonl'
     
-    # Load config
     config = load_yaml(config_file)
     
-    # Setup
     seed = args.seed if args.seed is not None else config['env']['seed']
     set_seed(seed)
     
@@ -559,14 +519,12 @@ def main():
     best_dir = os.path.join(args.save_dir, "best")
     pathlib.Path(best_dir).mkdir(parents=True, exist_ok=True)
 
-    # Read config values
     retriever_cfg = config['retriever']
     emb_size = retriever_cfg['emb_size']
     topic_pe = retriever_cfg['topic_pe']
     DDE_kwargs = retriever_cfg['DDE_kwargs']
     num_intents = retriever_cfg['num_intents']
 
-    # Print configuration
     print(f"\n{'='*60}")
     print(f"Dataset: {args.dataset.upper()}")
     print(f"Config: {config_file}")
@@ -574,13 +532,11 @@ def main():
     print(f"Output: {args.save_dir}")
     print(f"{'='*60}\n")
 
-    # Tokenizer & LLM setup
     tok = AutoTokenizer.from_pretrained(args.model_name, use_auth_token=os.getenv("HF_TOKEN"))
     if tok.pad_token is None: 
         tok.pad_token = tok.eos_token
     tok.padding_side = 'left'
 
-    # Quantization config from YAML
     llm_cfg = config['llm']
     quant_cfg = llm_cfg['quantization']
     bnb = BitsAndBytesConfig(
@@ -600,7 +556,6 @@ def main():
     llm = prepare_model_for_kbit_training(llm)
 
     if not args.load_from_joint:
-        # LoRA config from YAML
         lora_cfg = llm_cfg['lora']
         lora = LoraConfig(
             r=lora_cfg['r'],
@@ -612,7 +567,6 @@ def main():
         )
         llm = get_peft_model(llm, lora)
 
-    # Retriever
     retriever = Retriever(
         emb_size=emb_size,
         topic_pe=topic_pe,
@@ -620,7 +574,6 @@ def main():
         num_intents=num_intents
     ).to(device, dtype=torch.bfloat16)
 
-    # Triple projection
     proj_cfg = config['triple_projection']
     d_mid = llm.config.hidden_size // proj_cfg['hidden_divisor']
     triple_proj = nn.Sequential(
@@ -630,7 +583,6 @@ def main():
         nn.LayerNorm(llm.config.hidden_size)
     ).to(device, dtype=torch.bfloat16)
 
-    # Enhanced prompt
     prompt_cfg = config['neural_prompt']
     enhanced_prompt = Consensus_aware_Prompt(
         llm.config.hidden_size, 
@@ -638,7 +590,6 @@ def main():
         gate_boost=prompt_cfg['gate_boost']
     ).to(device, dtype=torch.bfloat16)
 
-    # Load checkpoints
     if args.load_from_joint:
         if not args.joint_dir: 
             raise ValueError("--load_from_joint requires --joint_dir")
@@ -736,7 +687,6 @@ def main():
             )
         )
 
-    # Convert bridge components to bfloat16
     bridge.selector.wae = bridge.selector.wae.to(dtype=torch.bfloat16)
     bridge.G = bridge.G.to(dtype=torch.bfloat16)
     if hasattr(bridge, 'beta') and bridge.beta is not None: 
@@ -744,7 +694,6 @@ def main():
     if hasattr(bridge, 'T') and bridge.T is not None: 
         bridge.T = bridge.T.to(dtype=torch.bfloat16)
 
-    # Optimizer - using config learning rates
     opt_cfg = config['optimizer']
     lr_cfg = opt_cfg['learning_rates']
     
@@ -764,7 +713,6 @@ def main():
     
     optimizer = AdamW(param_groups, weight_decay=opt_cfg['weight_decay'])
 
-    # DataLoaders
     train_ds = RetrieverDataset(config=config, split='train')
     val_ds = RetrieverDataset(config=config, split='val')
     train_loader = DataLoader(
@@ -779,7 +727,6 @@ def main():
         pin_memory=True
     )
 
-    # Training config
     train_cfg = config['training']
     epochs = args.epochs if args.epochs is not None else train_cfg['epochs']
     patience_limit = train_cfg['patience']
@@ -792,7 +739,6 @@ def main():
 
     best_val, best_epoch, patience = float("inf"), 0, 0
 
-    # Training loop
     for ep in range(epochs):
         enable_e2e = args.end_to_end and (ep + 1) > train_cfg['freeze_retriever_epochs']
 
@@ -809,7 +755,6 @@ def main():
 
         print(f"[Epoch {ep+1:3d}] Train: {tr_loss:.4f} | Val: {va_loss:.4f}")
 
-        # Save best model
         if va_loss < best_val:
             best_val, best_epoch, patience = va_loss, ep+1, 0
             Path(best_dir).mkdir(parents=True, exist_ok=True)
@@ -852,7 +797,6 @@ def main():
     print(f"Model saved: {best_dir}")
     print(f"{'='*60}\n")
 
-    # Test inference
     if args.do_test:
         print("[Test] Loading best weights...")
         
@@ -892,7 +836,6 @@ def main():
         run_test_inference(args, config, test_loader, retriever, triple_proj, 
                           enhanced_prompt, llm, tok, device, bridge)
         
-        # Evaluation
         try:
             from src.utils.evaluation import eval_results_corrected_compat, eval_results_hit_any_compat
             
