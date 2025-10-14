@@ -1,0 +1,31 @@
+task: 'retriever'
+
+env:
+  num_threads: 16
+  seed: 42
+
+dataset:
+  name: 'cwq'
+  text_encoder_name: 'gte-large-en-v1.5'
+
+retriever:
+  emb_size: 1024
+  topic_pe: true
+  DDE_kwargs:
+    num_rounds: 2
+    num_reverse_rounds: 2
+  use_intent: true
+  num_intents: 3 
+
+optimizer:
+  lr: 1e-3
+  weight_decay: 0.0001  
+  selector_lr: 5e-6  
+
+eval:
+  k_list: '100'
+
+train:
+  num_epochs: 10000
+  patience: 10
+  save_prefix: 'cwq'

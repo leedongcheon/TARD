@@ -1,0 +1,106 @@
+task: 'joint'
+
+env:
+  num_threads: 16
+  seed: 42
+
+dataset:
+  name: 'cwq'
+  text_encoder_name: 'gte-large-en-v1.5'
+
+retriever:
+  emb_size: 1024
+  topic_pe: true
+  num_intents: 4
+  
+  DDE_kwargs:
+    num_rounds: 2
+    num_reverse_rounds: 2
+  
+  selection:
+    tau_gumbel: 0.5
+  
+  loss:
+    focal_alpha: 0.75
+    focal_gamma: 2.0
+    ranking_margin: 2.0
+    decorrelation_k: 100
+    pattern_k: 100
+    pattern_temp: 0.1
+
+neural_prompt:
+  overlap_encoder_hidden: 64
+  dropout: 0.1
+  gate_boost: 1.0
+  
+  system_prompt: |
+    Based on the triplets from a knowledge graph, please answer the given question. 
+    Triples marked with *** (strong agreement) or ** (moderate agreement) indicate 
+    consensus across multiple retrieval perspectives. 
+    Please keep the answers as simple as possible and return all the possible answers 
+    as a list, each with a prefix "ans:".
+  
+  cot_prompt: |
+    Format your above answers by listing each answer on a separate line, 
+    starting with the prefix "ans:".
+  
+  kg_wrapper:
+    start: "\n\nKnowledge (sorted by importance):\n"
+    end: "\n\n"
+  
+  markers:
+    high: "*** "
+    medium: "** "
+    low: ""
+
+llm:
+  quantization:
+    load_in_4bit: true
+    compute_dtype: 'bfloat16'
+    quant_type: 'nf4'
+    use_double_quant: true
+  
+  lora:
+    r: 8
+    lora_alpha: 16
+    target_modules: ['q_proj', 'v_proj']
+    lora_dropout: 0.05
+    bias: 'none'
+
+triple_projection:
+  hidden_divisor: 2
+
+optimizer:
+  weight_decay: 0.0001
+  max_grad_norm: 0.5
+  
+  learning_rates:
+    retriever: 1.0e-6
+    triple_proj: 5.0e-6
+    enhanced_prompt: 5.0e-6
+    selector: 5.0e-6
+    llm_lora: 1.0e-5
+    dpo_only: 5.0e-6
+
+training:
+  epochs: 20
+  patience: 3
+  gradient_accumulation_steps: 4
+  per_intent_total: 120
+  freeze_retriever_epochs: 0
+  train_selector_after: 0
+  
+  rho : 0.9
+  rank_weight: 0.5
+  diversity_weight: 0.5
+  pattern_div_weight: 0.1
+  
+  dpo_beta: 0.1
+  dpo_weight: 0.2
+  dpo_threshold: 0.1
+  dpo_margin: 0.0
+
+test:
+  gen_max_new_tokens: 64
+  fixed_total_test: 100
+  limit_test: 0
