@@ -127,7 +127,6 @@ python train_joint.py \
   --g_cache artifacts/gte/G.pt \
   --retriever_ckpt retriever_intent_Feb12-03:40:12/best.pth \
   --use_adaptive_dpo \
-  --confidence_metric hit@1 \
   --adaptive_threshold 0.05 \
   --do_test
 ```
