@@ -33,7 +33,7 @@ pip install -U xformers --index-url https://download.pytorch.org/whl/cu118
 ```bash
 python emb.py -d D
 ```
-where `D` should be a dataset mentioned in ["Supported Datasets"](#supported-datasets).
+where `D` should be a dataset mentioned in ["Datasets"](#datasets).
 
 
 
