@@ -36,28 +36,36 @@ python emb.py -d D
 where `D` should be a dataset mentioned in ["Supported Datasets"](#supported-datasets).
 
 
+
+## Environment Setup
+
+We set up the TARD environment using PyTorch 2.1.0 (CUDA 11.8).
+
+```bash
+conda create -n tard python=3.10 -y
+conda activate tard
+
+pip install -r requirements/tard.txt
+
+pip install torch==2.1.0 --index-url https://download.pytorch.org/whl/cu118
+pip install torch-geometric==2.5.3
+pip install pyg_lib==0.3.1 torch_scatter==2.1.2 torch_sparse==0.6.18 \
+     -f https://data.pyg.org/whl/torch-2.1.0+cu118.html
+
+```
+
 ## 2-1: Intent Selector Training
 
 We train the **Intent Selector** to learn topic-level intent representations based on pre-computed question, entity, and relation embeddings.
 
 
-### Installation
-
-We next switch to the TARD environment for training the Intent Selector.
-
-```bash
-conda create -n tard python=3.10 -y
-conda activate tard
-pip install -r requirements/tard.txt
-
-```
+### Training
 
 Train the Intent Selector to learn topic-level latent intents from the pre-computed embeddings:
 
-### Training
+```bash
 cd Intent_selector
 
-```bash
 python train.py \
   --train_pkl ../data_files/<dataset>/processed/train.pkl \
   --train_pth ../data_files/<dataset>/emb/gte-large-en-v1.5/train.pth \
