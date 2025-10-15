@@ -48,7 +48,7 @@ We next switch to the TARD environment for training the Intent Selector.
 ```bash
 conda create -n tard python=3.10 -y
 conda activate tard
-pip install -r requirements/retriever.txt
+pip install -r requirements/tard.txt
 
 ```
 
