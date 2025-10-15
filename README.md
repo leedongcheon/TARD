@@ -25,7 +25,7 @@ We use `gte-large-en-v1.5` for text encoder, hence the environment name.
 conda create -n gte_large_en_v1-5 python=3.10 -y
 conda activate gte_large_en_v1-5
 pip install -r requirements/gte_large_en_v1-5.txt
-pip install -U xformers --index-url https://download.pytorch.org/whl/cu121
+pip install -U xformers --index-url https://download.pytorch.org/whl/cu118
 ```
 
 ### Inference (Embedding Computation)
